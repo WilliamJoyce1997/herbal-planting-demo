@@ -1,0 +1,241 @@
+import { expect, test } from '@playwright/test'
+import { read, utils } from 'xlsx'
+import { readdir } from 'node:fs/promises'
+import { today } from '../../src/domain/model'
+
+const root = '/#/admin/'
+const employee = '/#/employee/'
+const desktop = [
+  ['数据总览','让每一块药田都有数据可循'],['基地地块','基地地块'],['视频监测','视频监测'],['环境监测','环境监测'],
+  ['作物监测','作物监测'],['土壤监测','土壤与灌溉监测'],['灌溉监测','灌溉监测'],['产量分析','产量分析'],
+  ['种植计划','种植计划与任务调度'],['任务管理','任务管理'],['告警中心','告警中心'],
+]
+const mobile = [['首页','员工工作台'],['任务','我的任务'],['地块','我的田地'],['计划','种植计划'],['我的','个人中心']]
+
+test('管理端和员工端的全部模块可访问，控制台无未处理错误', async ({page}) => {
+  const errors:string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  page.on('console', message => { if (message.type()==='error') errors.push(message.text()) })
+  await page.goto('/')
+  const adminNav = page.getByRole('navigation',{name:'管理端导航'})
+  for (const [label,title] of desktop) {
+    await adminNav.getByRole('link',{name:label,exact:true}).click()
+    await expect(page.getByRole('heading',{name:title,level:1})).toBeVisible()
+  }
+  await page.getByRole('link',{name:'员工端预览',exact:true}).click()
+  await page.setViewportSize({width:390,height:844})
+  const mobileNav = page.getByRole('navigation',{name:'员工端导航'})
+  for (const [label,title] of mobile) {
+    await mobileNav.getByRole('link',{name:label,exact:true}).click()
+    await expect(page.getByRole('heading',{name:title,level:1})).toBeVisible()
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(390)
+  }
+  await page.getByRole('link',{name:'返回管理端',exact:true}).click()
+  await expect(page).toHaveURL(/#\/admin\/overview/)
+  expect(errors).toEqual([])
+})
+
+test('基地切换联动数据、地图可打开详情、图表切换和缩放',async({page})=>{
+  await page.goto(root+'overview')
+  const area=page.locator('.stat-card').filter({hasText:'种植面积'})
+  await expect(area).toContainText('2,285.0')
+  const chart=page.getByRole('img',{name:'空气温度图表'}).locator('canvas')
+  await expect(chart).toBeVisible()
+  await page.getByRole('button',{name:'湿度',exact:true}).click()
+  const switched=page.getByRole('img',{name:'空气湿度图表'}).locator('canvas')
+  await expect(switched).toBeVisible()
+  const size=await switched.boundingBox()
+  await page.getByRole('button',{name:'折叠侧栏'}).click()
+  await expect.poll(async()=> (await switched.boundingBox())?.width ?? 0).toBeGreaterThan(size?.width ?? 0)
+  await page.getByRole('combobox',{name:'当前基地'}).selectOption('longxi')
+  await expect(area).toContainText('494.0')
+  await expect(page.getByRole('button',{name:'A-01 地块详情'})).toHaveCount(0)
+  await page.getByRole('button',{name:'D-01 地块详情'}).click()
+  await expect(page.getByRole('dialog').getByText('D-01 摄像头')).toBeVisible()
+})
+
+test('管理端创建任务、员工提交、退回重提、管理员审核',async({page})=>{
+  await page.goto(root+'tasks')
+  await page.getByRole('button',{name:'创建任务'}).click()
+  let dialog=page.getByRole('dialog')
+  await dialog.getByLabel('任务名称').fill('验收田间任务')
+  await dialog.getByLabel('作业要求').fill('巡查药田并记录数量')
+  await dialog.getByLabel('执行员工').selectOption('employee-lin')
+  await dialog.getByRole('button',{name:'保存任务'}).click()
+  await expect(page.getByText('验收田间任务',{exact:true}).first()).toBeVisible()
+  await page.goto(employee+'tasks')
+  await page.getByLabel('模拟执行身份').selectOption('employee-lin')
+  await page.getByRole('button',{name:/验收田间任务/}).click()
+  dialog=page.getByRole('dialog')
+  await dialog.getByRole('button',{name:'接收任务'}).click()
+  await dialog.getByRole('button',{name:'开始执行'}).click()
+  await dialog.getByLabel('作业记录',{exact:true}).fill('已完成药田巡检')
+  await dialog.getByLabel('完成数量').fill('12')
+  await dialog.getByRole('button',{name:'提交完成申请'}).click()
+  await expect(dialog.getByText('待审核',{exact:true})).toBeVisible()
+  await page.goto(root+'tasks')
+  await page.getByRole('row').filter({hasText:'验收田间任务'}).getByRole('button',{name:'审核'}).click()
+  dialog=page.getByRole('dialog')
+  await expect(dialog.getByText('已完成药田巡检',{exact:true})).toBeVisible()
+  await dialog.getByLabel('审核说明').fill('补充巡检范围')
+  await dialog.getByRole('button',{name:'审核退回'}).click()
+  await expect(dialog.getByText('补充巡检范围')).toBeVisible()
+  await page.goto(employee+'tasks')
+  await page.getByLabel('模拟执行身份').selectOption('employee-lin')
+  await page.getByRole('button',{name:/验收田间任务/}).click()
+  dialog=page.getByRole('dialog')
+  await dialog.getByLabel('作业记录',{exact:true}).fill('已完成整片药田巡检')
+  await dialog.getByRole('button',{name:'提交完成申请'}).click()
+  await expect(dialog.getByText('待审核',{exact:true})).toBeVisible()
+  await page.goto(root+'tasks')
+  await page.getByRole('row').filter({hasText:'验收田间任务'}).getByRole('button',{name:'审核'}).click()
+  dialog=page.getByRole('dialog')
+  await dialog.getByRole('button',{name:'审核通过'}).click()
+  await expect(dialog.getByText('已完成',{exact:true})).toBeVisible()
+  await page.reload()
+  await page.getByLabel('任务搜索').fill('验收田间任务')
+  await page.getByRole('button',{name:'查询'}).click()
+  await expect(page.getByRole('row').filter({hasText:'验收田间任务'})).toContainText('已完成')
+})
+
+test('当天打卡防重复、员工巡检和异常联动、告警确认处理关闭',async({page})=>{
+  await page.setViewportSize({width:390,height:844})
+  await page.goto(employee+'home')
+  const inButton=page.getByRole('button',{name:/上班打卡/})
+  const outButton=page.getByRole('button',{name:/下班打卡/})
+  await expect(outButton).toBeDisabled()
+  await inButton.click()
+  await expect(inButton).toBeDisabled()
+  await outButton.click()
+  await expect(outButton).toBeDisabled()
+  await page.reload()
+  await expect(inButton).toBeDisabled()
+  await expect(outButton).toBeDisabled()
+  await page.getByRole('navigation',{name:'员工端导航'}).getByRole('link',{name:'地块',exact:true}).click()
+  await page.getByRole('button',{name:'提交巡检记录'}).click()
+  let dialog=page.getByRole('dialog')
+  await dialog.getByLabel('巡检说明').fill('正常巡视通过')
+  await dialog.getByRole('button',{name:'保存巡检记录'}).click()
+  await expect(page.getByText('正常巡视通过',{exact:true})).toBeVisible()
+  await page.getByRole('button',{name:'上报异常'}).click()
+  dialog=page.getByRole('dialog')
+  await dialog.getByLabel('异常描述').fill('测试水表渗漏')
+  await dialog.getByLabel(/现场照片/).setInputFiles('src/assets/crop.jpg')
+  await expect(dialog.getByRole('img',{name:'选中的现场照片'})).toBeVisible()
+  await dialog.getByRole('button',{name:'提交异常'}).click()
+  await expect(page.getByText('测试水表渗漏',{exact:true})).toBeVisible()
+  await page.setViewportSize({width:1440,height:900})
+  await page.goto(root+'alarms')
+  await page.getByRole('row').filter({hasText:'测试水表渗漏'}).getByRole('button',{name:'处置'}).click()
+  dialog=page.getByRole('dialog')
+  await expect(dialog.getByRole('img',{name:'异常现场照片'})).toBeVisible()
+  for(const [action,description] of [['确认告警','确认渗漏'],['处理告警','已登记检修'],['关闭告警','复核通过']]){
+    await dialog.getByLabel('处理说明').fill(description)
+    await dialog.getByRole('button',{name:action}).click()
+    await expect(dialog.getByText(description,{exact:false})).toBeVisible()
+  }
+  await expect(dialog.getByText('已关闭',{exact:true})).toBeVisible()
+})
+
+test('灌溉和采收修改联动统计，下载的 Excel 含真实数据',async({page})=>{
+  await page.goto(root+'irrigation')
+  const volumeCard=page.locator('.stat-card').filter({hasText:'今日用水量'}).locator('strong')
+  const original=Number((await volumeCard.innerText()).replaceAll(',',''))
+  await page.getByRole('button',{name:'新增灌溉记录'}).click()
+  let dialog=page.getByRole('dialog')
+  await dialog.getByLabel('开始时间').fill(today()+'T23:10')
+  await dialog.getByLabel('结束时间').fill(today()+'T23:20')
+  await dialog.getByLabel('实际用水量（m³）').fill('1234.56')
+  await dialog.getByLabel('灌溉状态').selectOption('已完成')
+  await dialog.getByRole('button',{name:'保存灌溉记录'}).click()
+  await expect.poll(async()=>Number((await volumeCard.innerText()).replaceAll(',',''))).toBeCloseTo(original+1234.56,1)
+  const downloadPromise=page.waitForEvent('download')
+  await page.getByRole('button',{name:'导出 Excel'}).click()
+  const file=await downloadPromise
+  expect(file.suggestedFilename()).toBe('灌溉记录.xlsx')
+  const stream=await file.createReadStream()
+  const chunks:Buffer[]=[]
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk))
+  const book=read(Buffer.concat(chunks),{type:'buffer'})
+  const rows=utils.sheet_to_json<Record<string,unknown>>(book.Sheets['演示记录'])
+  expect(rows.some(row=>row.用水量_m3===1234.56)).toBe(true)
+  await page.goto(root+'yield')
+  const actual=page.locator('.stat-card').filter({hasText:'实际采收'}).locator('strong')
+  const before=Number((await actual.innerText()).replaceAll(',',''))
+  await page.getByRole('button',{name:'新增采收记录'}).click()
+  dialog=page.getByRole('dialog')
+  await dialog.getByLabel('采收面积（亩）').fill('5')
+  await dialog.getByLabel('鲜品重量（kg）').fill('321')
+  await dialog.getByLabel('干品重量（kg）').fill('71')
+  await dialog.getByRole('button',{name:'保存采收记录'}).click()
+  await expect.poll(async()=>Number((await actual.innerText()).replaceAll(',',''))).toBe(before+321)
+  await page.reload()
+  await expect.poll(async()=>Number((await actual.innerText()).replaceAll(',',''))).toBe(before+321)
+  await page.getByRole('button',{name:'干品',exact:true}).click()
+  await expect(page.locator('.stat-card').filter({hasText:'实际采收'})).toContainText('干品')
+})
+
+test('甘特图按周切换，创建计划节点并生成关联任务',async({page})=>{
+  await page.goto(root+'plans')
+  await page.getByRole('button',{name:'按周'}).click()
+  await expect(page.getByRole('button',{name:'按周'})).toHaveAttribute('aria-pressed','true')
+  await page.getByRole('button',{name:'新增种植计划'}).click()
+  let dialog=page.getByRole('dialog')
+  await dialog.getByLabel('计划名称').fill('验收种植计划')
+  await dialog.getByLabel('节点名称').fill('播种验收')
+  await dialog.getByLabel('作业要求').fill('完成播种并记录')
+  await dialog.getByRole('button',{name:'添加节点'}).click()
+  await dialog.getByLabel('节点名称').last().fill('同步巡检')
+  await dialog.getByRole('button',{name:'保存种植计划'}).click()
+  await expect(page.getByRole('heading',{name:'验收种植计划'})).toBeVisible()
+  await page.getByRole('button',{name:'同步巡检',exact:true}).click()
+  await expect(page.getByText('同步巡检',{exact:true}).last()).toBeVisible()
+  await page.getByRole('button',{name:'播种验收',exact:true}).click()
+  await page.getByRole('button',{name:'创建关联任务'}).click()
+  dialog=page.getByRole('dialog')
+  await expect(dialog.getByLabel('任务名称')).toHaveValue('播种验收')
+  await dialog.getByRole('button',{name:'保存任务'}).click()
+  await expect(page.getByRole('dialog',{name:'任务详情'}).getByText('播种验收',{exact:true})).toBeVisible()
+})
+
+test('静态根路径及 Pages 子路径加载资源，Hash 深层地址刷新',async({page})=>{
+  const output = await readdir('dist', {recursive:true})
+  expect(output.filter(name => /\.(?:docx|png|map|md|ts|zip)$/.test(name))).toEqual([])
+  const failed:string[]=[]
+  page.on('response',response=>{if(response.status()>=400)failed.push(response.url())})
+  for(const mount of ['','/herbal-planting-demo']){
+    await page.goto(mount+root+'soil')
+    await expect(page.getByRole('heading',{name:'土壤与灌溉监测',level:1})).toBeVisible()
+    await expect(page.getByRole('img',{name:'土壤含水率图表'}).locator('canvas')).toBeVisible()
+    await page.getByRole('button',{name:/pH 值/}).click()
+    await expect(page.getByRole('img',{name:'pH 值图表'}).locator('canvas')).toBeVisible()
+    await page.reload()
+    await expect(page.getByRole('heading',{name:'土壤与灌溉监测',level:1})).toBeVisible()
+    expect(new URL(page.url()).pathname).toBe(mount+'/')
+  }
+  expect(failed).toEqual([])
+})
+
+test('四张参考页面在桌面和移动尺寸均可浏览',async({page},info)=>{
+  for(const width of [1920,1440,1366]){
+    await page.setViewportSize({width,height:width===1920?1080:width===1440?900:768})
+    for(const name of ['overview','soil','plans']){
+      await page.goto(root+name)
+      await expect(page.locator('h1')).toBeVisible()
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width)
+      if(width===1440) await page.screenshot({path:info.outputPath(name+'.png'),animations:'disabled'})
+    }
+  }
+  for(const width of [360,390,430]){
+    await page.setViewportSize({width,height:844})
+    await page.goto(employee+'plots')
+    await expect(page.getByRole('heading',{name:'我的田地'})).toBeVisible()
+    await expect(page.getByRole('navigation',{name:'员工端导航'})).toBeVisible()
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width)
+    await page.getByRole('button',{name:'上报异常'}).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    expect(await page.getByRole('dialog').evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true)
+    await page.keyboard.press('Escape')
+    if(width===390) await page.screenshot({path:info.outputPath('employee-plots.png'),fullPage:true,animations:'disabled'})
+  }
+})

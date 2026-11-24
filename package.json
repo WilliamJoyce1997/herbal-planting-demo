@@ -1,0 +1,31 @@
+{
+  "dependencies": {
+    "echarts": "^6.1.0",
+    "element-plus": "^2.14.8",
+    "lucide-vue-next": "^0.577.0",
+    "pinia": "^4.1.0",
+    "vue": "^3.5.46",
+    "vue-router": "^5.5.1",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "name": "herbal-planting-demo",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run tests/domain.test.ts",
+    "test:e2e": "playwright test"
+  },
+  "private": true,
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@types/node": "^24.19.2",
+    "@vitejs/plugin-vue": "^6.0.11",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1",
+    "vue-tsc": "^3.3.14"
+  }
+}
